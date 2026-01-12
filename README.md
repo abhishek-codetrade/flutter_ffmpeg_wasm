@@ -10,7 +10,8 @@
 Add the following src script in the `head` tag of the `index.html` file:
 
 ```html
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js" crossorigin="anonymous" async></script>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.15/dist/umd/util.js" crossorigin="anonymous"></script>
 ```
 
 **Run shell**
@@ -52,7 +53,8 @@ Create / edit your `launch.json`
 Add the following src script in the `head` tag of the `index.html` file:
 
 ```html
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js" crossorigin="anonymous" async></script>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js" crossorigin="anonymous" async></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.15/dist/umd/util.js" crossorigin="anonymous" async></script>
 ```
 
 The document _`index.html`_ should contain these headers:
@@ -131,99 +133,46 @@ _Note_: When importing a script from another domain, it's recommended to use `lo
 
 ## Usage
 
-Before accessing any methods first need to `createFFmpeg()` and `load()`.
-
 ### Create FFmpeg instance
 
 ```dart
-// Note: CreateFFmpegParam is optional and and corePath is also optional
-FFmpeg ffmpeg = createFFmpeg(CreateFFmpegParam(log: true, corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'));
+// Create instance
+FFmpeg ffmpeg = FFmpeg();
+
+// Load ffmpeg.wasm
+// You can pass a config object if needed, but default relies on CDN or local setup
+await ffmpeg.load(js.JsObject.jsify({
+  'coreURL': await toBlobURL('https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js', 'text/javascript'),
+  'wasmURL': await toBlobURL('https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm', 'application/wasm'),
+}));
 ```
-
-To use a local `corePath`, do the following (in this case, you should provide these resources in your static directory: `ffmpeg.min.js` / `ffmpeg-core.js` / `ffmpeg-core.wasm` / `ffmpeg-core.worker.js`):
-
-```dart
-// suppose ffmpeg-core lives under https://myserver.com/ffmpeg/ffmpeg-core.js
-final url = Uri.base.resolve('ffmpeg/ffmpeg-core.js').toString();
-FFmpeg ffmpeg = createFFmpeg(CreateFFmpegParam(corePath: url));
-```
-
-For single thread implementation which doesn't require `SharedArrayBuffer`.
-
-```dart
-// Note: CreateFFmpegParam is optional and and corePath is also optional
-FFmpeg ffmpeg = createFFmpeg(CreateFFmpegParam(log: true, corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
-mainName: 'main'));
-```
-
 
 ### Use FFmpeg instance
 
 ```dart
 Future<Uint8List> exportVideo(Uint8List input) async {
-  // Note you can always reuse the same ffmpeg instance
-  FFmpeg? ffmpeg;
-  try {
-    ffmpeg = createFFmpeg(CreateFFmpegParam(log: true));
-    ffmpeg.setLogger(_onLogHandler);
-    ffmpeg.setProgress(_onProgressHandler);
+  final ffmpeg = FFmpeg();
+  
+  final baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+  await ffmpeg.load(js.JsObject.jsify({
+    'coreURL': await toBlobURL('$baseURL/ffmpeg-core.js', 'text/javascript'),
+    'wasmURL': await toBlobURL('$baseURL/ffmpeg-core.wasm', 'application/wasm'),
+  }));
 
-    // Check ffmpeg.isLoaded() before ffmpeg.load() if you are reusing the same instance
-    if (!ffmpeg.isLoaded()) {
-      await ffmpeg.load();
-    }
+  const inputFile = 'input.mp4';
+  const outputFile = 'output.mp4';
 
-    const inputFile = 'input.mp4';
-    const outputFile = 'output.mp4';
+  await ffmpeg.writeFile(inputFile, input);
 
-    ffmpeg.writeFile(inputFile, input);
+  // Exec command
+  await ffmpeg.exec(['-i', inputFile, '-s', '1920x1080', outputFile]);
 
-    // Equals to: await ffmpeg.run(['-i', inputFile, '-s', '1920x1080', outputFile]);
-    await ffmpeg.runCommand('-i $inputFile -s 1920x1080 $outputFile');
-
-    final data = ffmpeg.readFile(outputFile);
-    return data;
-  } finally {
-    // Do not call exit if you want to reuse same ffmpeg instance
-    // When you call exit the temporary files are deleted from MEMFS
-    // If you are working with multiple inputs you can free any of the via: ffmpeg.unlink('my_input.mp4')
-    ffmpeg?.exit();
-  }
+  final data = await ffmpeg.readFile(outputFile);
+  return data;
 }
 
-void _onProgressHandler(ProgressParam progress) {
-  print('Progress: ${progress.ratio * 100}%');
-}
-
-static final regex = RegExp(
-  r'frame\s*=\s*(\d+)\s+fps\s*=\s*(\d+(?:\.\d+)?)\s+q\s*=\s*([\d.-]+)\s+L?size\s*=\s*(\d+)\w*\s+time\s*=\s*([\d:\.]+)\s+bitrate\s*=\s*([\d.]+)\s*(\w+)/s\s+speed\s*=\s*([\d.]+)x',
-);
-
-void _onLogHandler(LoggerParam logger) {
-  if (logger.type == 'fferr') {
-    final match = regex.firstMatch(logger.message);
-
-    if (match != null) {
-      // indicates the number of frames that have been processed so far.
-      final frame = match.group(1);
-      // is the current frame rate
-      final fps = match.group(2);
-      // stands for quality 0.0 indicating lossless compression, other values indicating that there is some lossy compression happening
-      final q = match.group(3);
-      // indicates the size of the output file so far
-      final size = match.group(4);
-      // is the time that has elapsed since the beginning of the conversion
-      final time = match.group(5);
-      // is the current output bitrate
-      final bitrate = match.group(6);
-      // for instance: 'kbits/s'
-      final bitrateUnit = match.group(7);
-      // is the speed at which the conversion is happening, relative to real-time
-      final speed = match.group(8);
-
-      print('frame: $frame, fps: $fps, q: $q, size: $size, time: $time, bitrate: $bitrate$bitrateUnit, speed: $speed');
-    }
-  }
+void _onLogHandler(LogEvent logger) {
+  print('Log: ${logger.message}');
 }
 ```
 

@@ -5,24 +5,15 @@ homepage: "https://github.com/redleafsofts/flutter_ffmpeg_wasm"
 repository: "https://github.com/redleafsofts/flutter_ffmpeg_wasm"
 
 environment:
-  sdk: '>=2.19.2 <4.0.0'
-  flutter: ">=1.17.0"
+  sdk: '^3.10.0'
 
 dependencies:
   flutter:
     sdk: flutter
 
-  js: ^0.7.1
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-
-
-#flutter:
-#  plugin:
-#    platforms:
-#      web:
-#        pluginClass: FFmpeg
-#        fileName: src/ffmpeg.dart

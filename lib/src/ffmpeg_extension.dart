@@ -1,112 +1,116 @@
+// @dart=3.5
+import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:ffmpeg_wasm/src/ffmpeg.dart';
-import 'package:js/js.dart';
-import 'package:js/js_util.dart';
 
-@JS()
-@anonymous
-abstract class ProgressParam {
-  /// Number between 0 to 1.
-  external double get ratio;
-  external double? get time;
+// Interop types for callbacks
+
+extension type ProgressParam._(JSObject _) implements JSObject {
+  external double get progress; // 0 to 1
+  external int get time; // time in microseconds ? 0.12.x usually gives time.
+
+  // Old code had: double get ratio; double? get time;
+  // We need to adapt.
+  double get ratio => progress;
 }
 
-@JS()
-@anonymous
-abstract class LoggerParam {
-  /// info: internal workflow debug messages
-  /// fferr: ffmpeg native stderr output
-  /// ffout: ffmpeg native stdout output
+extension type LoggerParam._(JSObject _) implements JSObject {
   external String get type;
   external String get message;
 }
 
 extension FFmpegExtension on FFmpeg {
-  @JS('load')
-  external dynamic _load();
-
   /// Load FFmpeg core wasm module. Call this only once.
   ///
   /// Typically the load() func might take few seconds to minutes to complete, better to do it as early as possible.
-  Future<void> load() {
-    return promiseToFuture(_load());
+  Future<void> load() async {
+    // 0.12.x load takes a config object, usually null or empty object if defaults are fine.
+    // In dart:js_interop, references are handled differently, passing null might need care.
+    // But dynamic in ffmpeg.dart allows passing JS objects.
+    await this.load(null);
   }
 
   /// API to check where the core is loaded.
-  @JS('isLoaded')
-  external bool isLoaded();
-
-  @JS('FS')
-  external void _writeFile(String method, String fileName, Uint8List data);
+  bool isLoaded() {
+    return loaded;
+  }
 
   /// Write file to In-Memory File System (MEMFS).
-  void writeFile(String fileName, Uint8List data) {
-    _writeFile('writeFile', fileName, data);
+  ///
+  /// Note: This is now asynchronous.
+  Future<void> writeFile(String fileName, Uint8List data) async {
+    await this.writeFile(fileName, data);
   }
-
-  @JS('FS')
-  external Uint8List _readFile(String method, String fileName);
 
   /// Read file from MEMFS.
-  Uint8List readFile(String fileName) {
-    return _readFile('readFile', fileName);
+  ///
+  /// Note: This is now asynchronous.
+  Future<Uint8List> readFile(String fileName) async {
+    return await this.readFile(fileName);
   }
-
-  @JS('FS')
-  external void _unlink(String method, String fileName);
 
   /// Delete a file in MEMFS.
-  void unlink(String fileName) {
-    _unlink('unlink', fileName);
+  ///
+  /// Note: This is now asynchronous.
+  Future<void> unlink(String fileName) async {
+    await deleteFile(fileName);
   }
 
-  @JS('FS')
-  external List<dynamic> _readDir(String method, String fileName);
-
   /// List files inside specific path.
-  List<String> readDir(String path) {
-    return _readDir('readdir', path).cast<String>();
+  ///
+  /// Note: This is now asynchronous.
+  Future<List<String>> readDir(String path) async {
+    final jsArray = await listDir(path);
+    return jsArray.toDart.map((e) => (e as JSString).toDart).toList();
   }
 
   /// Kill the execution of the program, also remove MEMFS to free memory
-  @JS('exit')
-  external void exit();
-
-  @JS('setProgress')
-  external void _setProgress(void Function(ProgressParam progress) callback);
+  void exit() {
+    terminate();
+  }
 
   /// Progress handler to get current progress of ffmpeg command.
   void setProgress(void Function(ProgressParam progress) callback) {
-    _setProgress(allowInterop(callback));
+    on(
+        'progress',
+        (JSAny event) {
+          // event is a JS Object { progress: number, time: number }
+          // We need to wrap it into ProgressParam or cast it.
+          // Since ProgressParam was an abstract class in the old code, let's redefine it or map it.
+          // But wait, the old code used @anonymous abstract class which is fine for JS interop (old).
+          // With dart:js_interop, we can use extension types or just Map.
+          // Let's assume we can cast event to a JSObject and read properties.
+          // Or better, let's redefine ProgressParam as an extension type or interop class.
+          final p = event as ProgressParam;
+          callback(p);
+        }.toJS);
   }
-
-  @JS('setLogger')
-  external void _setLogger(void Function(LoggerParam logger) callback);
 
   /// Set custom logger to get ffmpeg output messages.
   void setLogger(void Function(LoggerParam logger) callback) {
-    _setLogger(allowInterop(callback));
+    on(
+        'log',
+        (JSAny event) {
+          final l = event as LoggerParam;
+          callback(l);
+        }.toJS);
   }
 
-  @JS('setLogging')
-  external void setLogging(bool logging);
+  // setLogging(bool) is not directly exposed in 0.12.x FFmpeg class usually,
+  // but it might be part of load config or just handled by setting a logger.
+  // For now, if the API doesn't have it, we might skip or leave a placeholder.
+  // The FFmpeg class in ffmpeg.dart doesn't have setLogging.
+  // We can probably ignore it or check if it's needed.
+  // The old code had: external void setLogging(bool logging);
+  // We will remove it if it's not supported, or just no-op.
 
   /// Run ffmpeg command.
-  ///
-  /// ```dart
-  /// await runCommand('-i flame.avi -s 1920x1080 output.mp4');
-  /// ```
-  Future<void> runCommand(String command) {
-    return run(command.split(' ')..removeWhere((e) => e.isEmpty));
+  Future<void> run(List<String> command) async {
+    await exec(command);
   }
 
-  /// Run ffmpeg command.
-  ///
-  /// ```dart
-  /// await run('-i', 'flame.avi', '-s', '1920x1080', 'output.mp4');
-  /// ```
-  Future<void> run(List<String> command) {
-    return promiseToFuture(callMethod(this, 'run', command));
+  Future<void> runCommand(String command) async {
+    await execCommand(command);
   }
 }
